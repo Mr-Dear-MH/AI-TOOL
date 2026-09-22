@@ -1,0 +1,6 @@
+{
+  "name": "VeoStudio AI - Video & Voice Generator",
+  "description": "Generate text-to-image, image-to-video, and multilingual voiceover in Urdu, Hindi, and 50+ languages with batch prompt generation and 20-30 min long video creation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
