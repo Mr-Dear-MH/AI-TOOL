@@ -15,9 +15,13 @@ import {
   CheckCircle2,
   ListOrdered,
   Maximize2,
+  Upload,
+  Camera,
+  RefreshCw,
+  Sliders,
 } from 'lucide-react';
 import { SceneItem, SupportedLanguage, CameraMotionType } from '../types';
-import { SUPPORTED_50_LANGUAGES, DURATION_OPTIONS, VISUAL_STYLES } from '../data/languages';
+import { SUPPORTED_50_LANGUAGES, DURATION_OPTIONS, VISUAL_STYLES, CAMERA_MOTIONS } from '../data/languages';
 import { renderCinematicFrame, recordCanvasToVideo } from '../utils/videoRenderer';
 import { SpeechEngine } from '../utils/speechEngine';
 
@@ -62,7 +66,7 @@ export const LongMovieStudioView: React.FC<LongMovieStudioViewProps> = ({
       voiceoverText: 'یہاں کے معماروں نے بغیر کسی شاہی محل یا جبر کے، دنیا کا سب سے پہلا پختہ نکاسیِ آب کا نظام قائم کیا۔',
       captionText: 'دنیا کا سب سے پہلا پختہ نکاسیِ آب کا نظام قائم کیا...',
       cameraMotion: 'Pan Left to Right',
-      imageUrl: 'https://images.unsplash.com/photo-1579783902614-a3fb3927b675?auto=format&fit=crop&w=1280&q=80',
+      imageUrl: 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?auto=format&fit=crop&w=1280&q=80',
       status: 'ready',
     },
     {
@@ -102,6 +106,7 @@ export const LongMovieStudioView: React.FC<LongMovieStudioViewProps> = ({
   const sceneStartTimeRef = useRef<number>(0);
   const cachedImages = useRef<Map<string, HTMLImageElement>>(new Map());
   const speechEngine = useRef(SpeechEngine.getInstance());
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const currentScene = scenes[currentSceneIndex] || scenes[0];
 
@@ -118,24 +123,49 @@ export const LongMovieStudioView: React.FC<LongMovieStudioViewProps> = ({
             drawSceneFrame(sc, 0);
           }
         };
+        img.onerror = () => {
+          console.warn('Failed to load scene image, fallback enabled:', sc.imageUrl);
+        };
       }
     });
   }, [scenes]);
 
   const drawSceneFrame = (scene: SceneItem, progress: number) => {
-    if (!canvasRef.current || !scene.imageUrl) return;
-    const img = cachedImages.current.get(scene.imageUrl);
-    if (!img) return;
+    if (!canvasRef.current) return;
+    const img = scene.imageUrl ? cachedImages.current.get(scene.imageUrl) : undefined;
 
     renderCinematicFrame({
       canvas: canvasRef.current,
-      image: img,
+      image: img as HTMLImageElement,
       progress,
       cameraMotion: scene.cameraMotion,
       captionText: showSubtitles ? scene.voiceoverText : undefined,
       isRtl: selectedLanguage.rtl,
     });
   };
+
+  // Immediate redraw whenever active scene or visual settings change
+  useEffect(() => {
+    if (currentScene.imageUrl) {
+      const existing = cachedImages.current.get(currentScene.imageUrl);
+      if (existing && existing.complete) {
+        drawSceneFrame(currentScene, sceneProgress);
+      } else {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.src = currentScene.imageUrl;
+        img.onload = () => {
+          cachedImages.current.set(currentScene.imageUrl!, img);
+          drawSceneFrame(currentScene, sceneProgress);
+        };
+        img.onerror = () => {
+          drawSceneFrame(currentScene, sceneProgress);
+        };
+      }
+    } else {
+      drawSceneFrame(currentScene, sceneProgress);
+    }
+  }, [currentSceneIndex, currentScene.imageUrl, currentScene.cameraMotion, currentScene.voiceoverText, showSubtitles]);
 
   // Playback control
   useEffect(() => {
@@ -147,7 +177,9 @@ export const LongMovieStudioView: React.FC<LongMovieStudioViewProps> = ({
 
     // Speak active scene
     if (currentScene.voiceoverText) {
-      speechEngine.current.speak(currentScene.voiceoverText, selectedLanguage.code);
+      speechEngine.current.speak(currentScene.voiceoverText, selectedLanguage.code, {
+        audioBase64: currentScene.audioBase64,
+      });
     }
 
     sceneStartTimeRef.current = performance.now() - sceneProgress * currentScene.durationSeconds * 1000;
@@ -188,6 +220,127 @@ export const LongMovieStudioView: React.FC<LongMovieStudioViewProps> = ({
       }
       setIsPlaying(true);
     }
+  };
+
+  // Upload Custom Image for Active Scene
+  const handleUploadSceneImage = (sceneIndex: number, file: File) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const result = e.target?.result as string;
+      if (result) {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.src = result;
+        img.onload = () => {
+          cachedImages.current.set(result, img);
+          setScenes((prev) =>
+            prev.map((s, idx) =>
+              idx === sceneIndex
+                ? {
+                    ...s,
+                    imageUrl: result,
+                    status: 'ready',
+                  }
+                : s
+            )
+          );
+          if (sceneIndex === currentSceneIndex) {
+            drawSceneFrame({ ...scenes[sceneIndex], imageUrl: result }, sceneProgress);
+          }
+        };
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Generate / Regenerate AI Visual for Single Scene
+  const handleGenerateSingleSceneVisual = async (sceneIndex: number) => {
+    const sc = scenes[sceneIndex];
+    if (!sc) return;
+
+    setScenes((prev) =>
+      prev.map((s, idx) => (idx === sceneIndex ? { ...s, isGenerating: true } : s))
+    );
+
+    try {
+      const res = await fetch('/api/generate-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: sc.visualPrompt,
+          aspectRatio: '16:9',
+          style: VISUAL_STYLES.find((s) => s.id === selectedStyle)?.promptModifier || 'cinematic 8k',
+          seed: Math.floor(Math.random() * 999999) + sceneIndex * 19,
+        }),
+      });
+
+      if (res.ok) {
+        const imgData = await res.json();
+        const imgUrl = imgData.imageUrl;
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.src = imgUrl;
+        img.onload = () => {
+          cachedImages.current.set(imgUrl, img);
+          setScenes((prev) =>
+            prev.map((s, idx) =>
+              idx === sceneIndex
+                ? { ...s, imageUrl: imgUrl, status: 'ready', isGenerating: false }
+                : s
+            )
+          );
+          if (sceneIndex === currentSceneIndex) {
+            drawSceneFrame({ ...sc, imageUrl: imgUrl }, sceneProgress);
+          }
+        };
+      }
+    } catch (err) {
+      console.error(`Error generating visual for scene ${sceneIndex + 1}:`, err);
+    } finally {
+      setScenes((prev) =>
+        prev.map((s, idx) => (idx === sceneIndex ? { ...s, isGenerating: false } : s))
+      );
+    }
+  };
+
+  // Test Scene Voice with Real TTS
+  const handleTestSceneVoice = async (sceneIndex: number) => {
+    const sc = scenes[sceneIndex];
+    if (!sc || !sc.voiceoverText) return;
+
+    if (!sc.audioBase64) {
+      try {
+        const res = await fetch('/api/generate-tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: sc.voiceoverText,
+            language: selectedLanguage.name,
+            languageCode: selectedLanguage.code,
+          }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.audioBase64) {
+            setScenes((prev) =>
+              prev.map((s, idx) =>
+                idx === sceneIndex ? { ...s, audioBase64: data.audioBase64 } : s
+              )
+            );
+            speechEngine.current.speak(sc.voiceoverText, selectedLanguage.code, {
+              audioBase64: data.audioBase64,
+            });
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn('Scene TTS fetch error', e);
+      }
+    }
+
+    speechEngine.current.speak(sc.voiceoverText, selectedLanguage.code, {
+      audioBase64: sc.audioBase64,
+    });
   };
 
   // Generate Long Storyboard with Gemini
@@ -516,6 +669,139 @@ export const LongMovieStudioView: React.FC<LongMovieStudioViewProps> = ({
               </div>
             </div>
           </div>
+
+          {/* Active Chapter Visual & Voice Direct Controls */}
+          <div className="bg-neutral-900/90 border border-neutral-800/90 rounded-2xl p-5 shadow-xl space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Sliders className="w-4 h-4 text-amber-400" />
+                <h3 className="text-xs font-bold uppercase tracking-wider text-neutral-200">
+                  Chapter {currentScene.sceneNumber}: Visual & Narration Controls
+                </h3>
+              </div>
+
+              {/* Hidden File Input for uploading custom image */}
+              <input
+                type="file"
+                ref={fileInputRef}
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleUploadSceneImage(currentSceneIndex, file);
+                }}
+              />
+
+              <div className="flex items-center gap-2">
+                <button
+                  id="btn-chapter-upload-image"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-neutral-950 border border-neutral-800 hover:border-amber-500/80 text-xs font-semibold text-neutral-300 hover:text-amber-300 transition-all cursor-pointer"
+                >
+                  <Upload className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Upload Image</span>
+                </button>
+
+                <button
+                  id="btn-chapter-generate-visual"
+                  disabled={currentScene.isGenerating}
+                  onClick={() => handleGenerateSingleSceneVisual(currentSceneIndex)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-neutral-950 text-xs font-bold shadow-md transition-all cursor-pointer disabled:opacity-50"
+                >
+                  {currentScene.isGenerating ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-neutral-950" />
+                      <span>Generating Visual...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Wand2 className="w-3.5 h-3.5 text-neutral-950" />
+                      <span>Generate AI Visual</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Camera Motion & Voiceover Controls */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <label htmlFor="chapter-camera-motion" className="text-[11px] font-semibold text-neutral-400 flex items-center gap-1">
+                  <Camera className="w-3 h-3 text-neutral-400" />
+                  <span>Camera Motion (including Static):</span>
+                </label>
+                <select
+                  id="chapter-camera-motion"
+                  value={currentScene.cameraMotion}
+                  onChange={(e) => {
+                    const newMotion = e.target.value as CameraMotionType;
+                    setScenes((prev) =>
+                      prev.map((s, idx) => (idx === currentSceneIndex ? { ...s, cameraMotion: newMotion } : s))
+                    );
+                  }}
+                  className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-xs font-medium text-neutral-200 focus:outline-none focus:border-amber-500"
+                >
+                  {CAMERA_MOTIONS.map((cm) => (
+                    <option key={cm.id} value={cm.id}>
+                      {cm.icon} {cm.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <div className="flex items-center justify-between text-[11px] font-semibold text-neutral-400">
+                  <span>Voiceover Narration ({selectedLanguage.name}):</span>
+                  <button
+                    id="btn-test-chapter-voice"
+                    onClick={() => handleTestSceneVoice(currentSceneIndex)}
+                    className="text-amber-400 hover:text-amber-300 flex items-center gap-1 font-medium"
+                  >
+                    <Volume2 className="w-3 h-3" />
+                    <span>Test Voice</span>
+                  </button>
+                </div>
+                <input
+                  type="text"
+                  dir={selectedLanguage.rtl ? 'rtl' : 'ltr'}
+                  value={currentScene.voiceoverText}
+                  onChange={(e) => {
+                    const newText = e.target.value;
+                    setScenes((prev) =>
+                      prev.map((s, idx) =>
+                        idx === currentSceneIndex
+                          ? { ...s, voiceoverText: newText, captionText: newText, audioBase64: undefined }
+                          : s
+                      )
+                    );
+                  }}
+                  className="w-full bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-xs text-neutral-100 focus:outline-none focus:border-amber-500"
+                  placeholder="Enter narration in native script..."
+                />
+              </div>
+            </div>
+
+            {/* Visual Prompt Input */}
+            <div className="space-y-1">
+              <label className="text-[11px] font-semibold text-neutral-400">
+                Visual Prompt for AI Rendering:
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={currentScene.visualPrompt}
+                  onChange={(e) => {
+                    const newPrompt = e.target.value;
+                    setScenes((prev) =>
+                      prev.map((s, idx) => (idx === currentSceneIndex ? { ...s, visualPrompt: newPrompt } : s))
+                    );
+                  }}
+                  className="flex-1 bg-neutral-950 border border-neutral-800 rounded-xl px-3 py-2 text-xs text-neutral-200 focus:outline-none focus:border-amber-500"
+                  placeholder="Describe scene visual details, lighting, camera lens..."
+                />
+              </div>
+            </div>
+          </div>
         </div>
 
         {/* Right: Scene Storyboard Timeline Inspector (5 cols) */}
@@ -540,7 +826,7 @@ export const LongMovieStudioView: React.FC<LongMovieStudioViewProps> = ({
             </div>
 
             {/* Scrollable scene list */}
-            <div className="space-y-2.5 max-h-[520px] overflow-y-auto pr-1">
+            <div className="space-y-2.5 max-h-[560px] overflow-y-auto pr-1">
               {scenes.map((sc, index) => {
                 const isActive = index === currentSceneIndex;
                 return (
@@ -562,8 +848,12 @@ export const LongMovieStudioView: React.FC<LongMovieStudioViewProps> = ({
                       {sc.imageUrl ? (
                         <img src={sc.imageUrl} alt={sc.title} className="w-full h-full object-cover" />
                       ) : (
-                        <div className="w-full h-full flex items-center justify-center text-neutral-600 text-[10px]">
-                          Pending
+                        <div className="w-full h-full flex flex-col items-center justify-center text-neutral-600 text-[10px] p-1 text-center">
+                          {sc.isGenerating ? (
+                            <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
+                          ) : (
+                            <span>No Visual</span>
+                          )}
                         </div>
                       )}
                       <span className="absolute bottom-0.5 right-0.5 text-[9px] font-bold px-1 rounded bg-neutral-950/80 text-amber-300">
@@ -575,9 +865,11 @@ export const LongMovieStudioView: React.FC<LongMovieStudioViewProps> = ({
                     <div className="flex-1 min-w-0 space-y-1">
                       <div className="flex items-center justify-between">
                         <h4 className="text-xs font-bold text-neutral-100 truncate">{sc.title}</h4>
-                        <span className="text-[10px] text-amber-400 font-medium shrink-0 ml-1">
-                          {sc.cameraMotion.split(' ')[0]}
-                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] text-amber-400 font-medium shrink-0">
+                            {sc.cameraMotion.split(' ')[0]}
+                          </span>
+                        </div>
                       </div>
                       <p
                         dir={selectedLanguage.rtl ? 'rtl' : 'ltr'}

@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Layers,
   Sparkles,
@@ -15,6 +15,7 @@ import {
   Trash2,
   Loader2,
   ExternalLink,
+  X,
 } from 'lucide-react';
 import { BatchPromptItem, SupportedLanguage, CameraMotionType } from '../types';
 import { SUPPORTED_50_LANGUAGES, VISUAL_STYLES, CAMERA_MOTIONS } from '../data/languages';
@@ -45,7 +46,44 @@ export const BatchGenView: React.FC<BatchGenViewProps> = ({
   const [previewProgress, setPreviewProgress] = useState<number>(0);
 
   const previewCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const previewImgRef = useRef<HTMLImageElement | null>(null);
   const speechEngine = useRef(SpeechEngine.getInstance());
+
+  // Render card preview onto canvas whenever activePreviewCard or previewProgress updates
+  useEffect(() => {
+    if (!activePreviewCard || !previewCanvasRef.current) return;
+
+    const renderCard = (img: HTMLImageElement | null) => {
+      if (!previewCanvasRef.current) return;
+      renderCinematicFrame({
+        canvas: previewCanvasRef.current,
+        image: img as HTMLImageElement,
+        progress: previewProgress,
+        cameraMotion: activePreviewCard.cameraDirection as CameraMotionType,
+        captionText: activePreviewCard.voiceoverScript,
+        isRtl: selectedLanguage.rtl,
+      });
+    };
+
+    if (activePreviewCard.imageUrl) {
+      if (previewImgRef.current && previewImgRef.current.src === activePreviewCard.imageUrl && previewImgRef.current.complete) {
+        renderCard(previewImgRef.current);
+      } else {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.src = activePreviewCard.imageUrl;
+        img.onload = () => {
+          previewImgRef.current = img;
+          renderCard(img);
+        };
+        img.onerror = () => {
+          renderCard(null);
+        };
+      }
+    } else {
+      renderCard(null);
+    }
+  }, [activePreviewCard, previewProgress, selectedLanguage.rtl]);
 
   // Default seeded items (so user sees realistic batch prompt cards immediately)
   const [batchItems, setBatchItems] = useState<BatchPromptItem[]>([
@@ -474,6 +512,90 @@ export const BatchGenView: React.FC<BatchGenViewProps> = ({
           ))}
         </div>
       </div>
+
+      {/* Active Card Preview Modal Player */}
+      {activePreviewCard && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="bg-neutral-900 border border-neutral-800 rounded-3xl max-w-2xl w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-bold text-neutral-100 flex items-center gap-2">
+                  <Film className="w-5 h-5 text-amber-400" />
+                  <span>{activePreviewCard.title}</span>
+                </h3>
+                <p className="text-xs text-neutral-400 mt-0.5">
+                  Camera: <span className="text-amber-400">{activePreviewCard.cameraDirection}</span> | Language:{' '}
+                  <span className="text-amber-400">{selectedLanguage.name}</span>
+                </p>
+              </div>
+              <button
+                id="btn-close-batch-preview"
+                onClick={() => {
+                  speechEngine.current.stop();
+                  setActivePreviewCard(null);
+                  setIsPlayingPreview(false);
+                }}
+                className="w-9 h-9 rounded-xl bg-neutral-800 hover:bg-neutral-700 flex items-center justify-center text-neutral-400 hover:text-white transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Video Canvas Container */}
+            <div className="relative aspect-video rounded-2xl overflow-hidden bg-neutral-950 border border-neutral-800 shadow-inner flex items-center justify-center">
+              <canvas
+                ref={previewCanvasRef}
+                width={854}
+                height={480}
+                className="w-full h-full object-contain"
+              />
+
+              {/* Progress bar overlay */}
+              <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-neutral-800/80">
+                <div
+                  className="h-full bg-gradient-to-r from-amber-500 to-orange-500 transition-all duration-100"
+                  style={{ width: `${Math.round(previewProgress * 100)}%` }}
+                />
+              </div>
+            </div>
+
+            {/* Voiceover text display */}
+            {activePreviewCard.voiceoverScript && (
+              <div className="bg-neutral-950 p-3.5 rounded-xl border border-neutral-800">
+                <p
+                  dir={selectedLanguage.rtl ? 'rtl' : 'ltr'}
+                  className={`text-sm text-neutral-200 ${selectedLanguage.rtl ? 'font-serif text-right' : ''}`}
+                >
+                  "{activePreviewCard.voiceoverScript}"
+                </p>
+              </div>
+            )}
+
+            {/* Modal Controls */}
+            <div className="flex items-center justify-between pt-2">
+              <button
+                id="btn-replay-batch-card"
+                onClick={() => handlePlayCard(activePreviewCard)}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-neutral-950 font-bold text-xs transition-colors"
+              >
+                <Play className="w-4 h-4 fill-current" />
+                <span>Replay Animation & Voice</span>
+              </button>
+              <button
+                id="btn-dismiss-batch-modal"
+                onClick={() => {
+                  speechEngine.current.stop();
+                  setActivePreviewCard(null);
+                  setIsPlayingPreview(false);
+                }}
+                className="px-4 py-2 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-semibold transition-colors"
+              >
+                Close Preview
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

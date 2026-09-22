@@ -2,6 +2,7 @@ import React from 'react';
 import { Sparkles, Video, Layers, Film, Mic, Globe2 } from 'lucide-react';
 import { ActiveStudioTab, SupportedLanguage } from '../types';
 import { SUPPORTED_50_LANGUAGES } from '../data/languages';
+import { InstallPWAButton } from './InstallPWAButton';
 
 interface HeaderProps {
   activeTab: ActiveStudioTab;
@@ -97,8 +98,10 @@ export const Header: React.FC<HeaderProps> = ({
             </button>
           </nav>
 
-          {/* Right: Language Quick Selector & API Status */}
-          <div className="flex items-center gap-3">
+          {/* Right: Desktop App Install & Language Quick Selector & API Status */}
+          <div className="flex items-center gap-2.5">
+            <InstallPWAButton />
+
             <div className="flex items-center gap-2 bg-neutral-900 border border-neutral-800 rounded-lg px-2.5 py-1.5">
               <Globe2 className="w-4 h-4 text-amber-400 shrink-0" />
               <select

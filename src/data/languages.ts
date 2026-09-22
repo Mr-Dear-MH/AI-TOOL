@@ -101,6 +101,7 @@ export const VISUAL_STYLES: VisualStyleOption[] = [
 ];
 
 export const CAMERA_MOTIONS: { id: CameraMotionType; label: string; icon: string; desc: string }[] = [
+  { id: 'None (Static)', label: 'None (Static / Still)', icon: '⏸️', desc: 'No camera motion, completely still and steady frame' },
   { id: 'Cinematic Zoom In', label: 'Zoom In (Push Focus)', icon: '🔍', desc: 'Slow cinematic push into character or scene focal point' },
   { id: 'Dramatic Zoom Out', label: 'Zoom Out (Reveal)', icon: '🔎', desc: 'Starts close and pulls back to reveal grand landscape' },
   { id: 'Pan Left to Right', label: 'Pan Left ➔ Right', icon: '➡️', desc: 'Smooth horizontal camera glide across scenery' },

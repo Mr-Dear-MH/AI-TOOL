@@ -32,12 +32,15 @@ export const QuickGenView: React.FC<QuickGenViewProps> = ({
   selectedLanguage,
   onLanguageChange,
 }) => {
-  // Mode: 'text-to-image' | 'image-to-video' | 'all-in-one'
-  const [subMode, setSubMode] = useState<'all-in-one' | 'text-to-image' | 'image-to-video'>('all-in-one');
+  // Mode: 'all-in-one' | 'text-to-image' | 'edit-image' | 'image-to-video'
+  const [subMode, setSubMode] = useState<'all-in-one' | 'text-to-image' | 'edit-image' | 'image-to-video'>('all-in-one');
 
   // Input states
   const [prompt, setPrompt] = useState<string>(
     'A majestic snow leopard perched atop the mist-shrouded Himalayan peaks at sunrise, cinematic lighting, 8k documentary'
+  );
+  const [editPrompt, setEditPrompt] = useState<string>(
+    'Add gentle falling snow, twilight aurora borealis in the sky, and warm golden glow'
   );
   const [selectedStyle, setSelectedStyle] = useState<string>('cinematic');
   const [aspectRatio, setAspectRatio] = useState<'16:9' | '9:16' | '1:1'>('16:9');
@@ -53,6 +56,7 @@ export const QuickGenView: React.FC<QuickGenViewProps> = ({
     'https://images.unsplash.com/photo-1546182990-dffeafbe841d?auto=format&fit=crop&w=1280&q=80'
   );
   const [imageObj, setImageObj] = useState<HTMLImageElement | null>(null);
+  const [currentAudioBase64, setCurrentAudioBase64] = useState<string | null>(null);
 
   // Processing states
   const [isGenerating, setIsGenerating] = useState<boolean>(false);
@@ -114,6 +118,7 @@ export const QuickGenView: React.FC<QuickGenViewProps> = ({
     if (autoVoiceover && !isMuted && voiceoverScript) {
       speechEngine.current.speak(voiceoverScript, selectedLanguage.code, {
         rate: 0.95,
+        audioBase64: currentAudioBase64 || undefined,
       });
     }
 
@@ -158,13 +163,38 @@ export const QuickGenView: React.FC<QuickGenViewProps> = ({
 
   // 1-Click Generate Pipeline
   const handleGenerate = async () => {
-    if (!prompt.trim()) return;
+    if (!prompt.trim() && subMode !== 'image-to-video') return;
 
     setIsGenerating(true);
     setIsPlaying(false);
     speechEngine.current.stop();
 
     try {
+      // Submode: Text-to-Image only
+      if (subMode === 'text-to-image') {
+        setGenerationStep('Generating AI Image with 8K Cinematic Lighting...');
+        const imgRes = await fetch('/api/generate-image', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt,
+            aspectRatio,
+            style: VISUAL_STYLES.find((s) => s.id === selectedStyle)?.promptModifier || 'cinematic 8k',
+            seed: Math.floor(Math.random() * 999999),
+          }),
+        });
+
+        if (imgRes.ok) {
+          const imgData = await imgRes.json();
+          if (imgData.imageUrl) {
+            setCurrentImageSrc(imgData.imageUrl);
+          }
+        }
+        setIsGenerating(false);
+        setGenerationStep('');
+        return;
+      }
+
       // Step 1: Script & Narration generation in selected language (Urdu / Hindi / 50+)
       setGenerationStep(`Writing cinematic script in ${selectedLanguage.name}...`);
       const scriptRes = await fetch('/api/generate-script', {
@@ -201,7 +231,7 @@ export const QuickGenView: React.FC<QuickGenViewProps> = ({
         }
       }
 
-      // Step 2: Image Generation (if in all-in-one or text-to-image)
+      // Step 2: Image Generation (if in all-in-one)
       if (subMode !== 'image-to-video') {
         setGenerationStep('Generating AI Image with 8K Cinematic Lighting...');
         const imgRes = await fetch('/api/generate-image', {
@@ -226,7 +256,7 @@ export const QuickGenView: React.FC<QuickGenViewProps> = ({
       // Step 3: Audio synthesis preparation
       setGenerationStep(`Synthesizing ${selectedLanguage.name} voiceover...`);
       try {
-        await fetch('/api/generate-tts', {
+        const ttsRes = await fetch('/api/generate-tts', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -236,6 +266,12 @@ export const QuickGenView: React.FC<QuickGenViewProps> = ({
             voice: 'Kore',
           }),
         });
+        if (ttsRes.ok) {
+          const ttsData = await ttsRes.json();
+          if (ttsData.audioBase64) {
+            setCurrentAudioBase64(ttsData.audioBase64);
+          }
+        }
       } catch (e) {
         console.warn('TTS fetch fallback', e);
       }
@@ -246,9 +282,42 @@ export const QuickGenView: React.FC<QuickGenViewProps> = ({
         setGenerationStep('');
         setCurrentTime(0);
         setIsPlaying(true);
-      }, 600);
+      }, 500);
     } catch (err: any) {
       console.error('Generation error:', err);
+      setIsGenerating(false);
+      setGenerationStep('');
+    }
+  };
+
+  // Edit Image with Gemini 3.1 Flash Image
+  const handleEditImage = async () => {
+    if (!editPrompt.trim() || !currentImageSrc) return;
+
+    setIsGenerating(true);
+    setIsPlaying(false);
+    setGenerationStep('Editing Image with Gemini 3.1 Flash Image preview...');
+
+    try {
+      const res = await fetch('/api/edit-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: editPrompt,
+          imageBytes: currentImageSrc,
+          mimeType: 'image/png',
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.imageUrl) {
+          setCurrentImageSrc(data.imageUrl);
+        }
+      }
+    } catch (err) {
+      console.error('Edit image error:', err);
+    } finally {
       setIsGenerating(false);
       setGenerationStep('');
     }
@@ -351,7 +420,7 @@ export const QuickGenView: React.FC<QuickGenViewProps> = ({
         </div>
 
         {/* Submode pill */}
-        <div className="flex items-center p-1 bg-neutral-900 border border-neutral-800 rounded-xl">
+        <div className="flex flex-wrap items-center p-1 bg-neutral-900 border border-neutral-800 rounded-xl gap-1">
           <button
             id="submode-all-in-one"
             onClick={() => setSubMode('all-in-one')}
@@ -361,7 +430,7 @@ export const QuickGenView: React.FC<QuickGenViewProps> = ({
                 : 'text-neutral-400 hover:text-neutral-200'
             }`}
           >
-            ⚡ 1-Click All-in-One (Image + Video + Voice)
+            ⚡ 1-Click All-in-One
           </button>
           <button
             id="submode-text-to-image"
@@ -372,7 +441,18 @@ export const QuickGenView: React.FC<QuickGenViewProps> = ({
                 : 'text-neutral-400 hover:text-neutral-200'
             }`}
           >
-            Text to Image
+            Create Image
+          </button>
+          <button
+            id="submode-edit-image"
+            onClick={() => setSubMode('edit-image')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+              subMode === 'edit-image'
+                ? 'bg-amber-500 text-neutral-950 shadow-sm'
+                : 'text-neutral-400 hover:text-neutral-200'
+            }`}
+          >
+            ✨ Edit Image (AI Edit)
           </button>
           <button
             id="submode-image-to-video"
@@ -393,47 +473,100 @@ export const QuickGenView: React.FC<QuickGenViewProps> = ({
         <div className="lg:col-span-5 space-y-6">
           {/* Prompt Section */}
           <div className="bg-neutral-900/90 border border-neutral-800/90 rounded-2xl p-5 shadow-xl space-y-4">
-            <div className="flex items-center justify-between">
-              <label htmlFor="prompt-input" className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-2">
-                <Wand2 className="w-3.5 h-3.5 text-amber-400" />
-                <span>Text Prompt / Visual Idea</span>
-              </label>
-              <div className="text-[11px] text-neutral-500">Supports Urdu, Hindi, Roman Urdu, English</div>
-            </div>
+            {subMode === 'edit-image' ? (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <label htmlFor="edit-prompt-input" className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-2">
+                    <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Image Edit Instruction (Gemini 3.1 Flash Image)</span>
+                  </label>
+                  <span className="text-[11px] text-amber-400 font-medium">Text-Guided Edit</span>
+                </div>
+                <textarea
+                  id="edit-prompt-input"
+                  rows={3}
+                  value={editPrompt}
+                  onChange={(e) => setEditPrompt(e.target.value)}
+                  placeholder="e.g. Add gentle snow falling, change time to dark cyberpunk night, add sunglasses or neon glow..."
+                  className="w-full bg-neutral-950 border border-neutral-800 rounded-xl p-3 text-sm text-neutral-100 placeholder-neutral-500 focus:outline-none focus:border-amber-500 transition-colors resize-none"
+                />
 
-            <textarea
-              id="prompt-input"
-              rows={3}
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder="e.g. A futuristic Cyberpunk street in Lahore during rain, or ek jungle mein sher..."
-              className="w-full bg-neutral-950 border border-neutral-800 rounded-xl p-3 text-sm text-neutral-100 placeholder-neutral-500 focus:outline-none focus:border-amber-500 transition-colors resize-none"
-            />
-
-            {/* Quick Inspiration Badges */}
-            <div className="space-y-1.5">
-              <span className="text-[11px] text-neutral-400 font-medium">Quick Presets:</span>
-              <div className="flex flex-wrap gap-1.5">
-                {samplePrompts.map((s, idx) => (
+                <div className="flex items-center gap-2">
                   <button
-                    key={idx}
-                    id={`sample-prompt-${idx}`}
-                    onClick={() => {
-                      setPrompt(s.text);
-                      const targetLang = SUPPORTED_50_LANGUAGES.find((l) => l.code === s.lang);
-                      if (targetLang) onLanguageChange(targetLang);
-                      setVoiceoverScript(s.voice);
-                    }}
-                    className="text-[11px] px-2.5 py-1 rounded-lg bg-neutral-800/80 hover:bg-neutral-800 text-neutral-300 hover:text-amber-300 border border-neutral-700/50 transition-colors"
+                    id="btn-apply-image-edit"
+                    disabled={isGenerating}
+                    onClick={handleEditImage}
+                    className="flex-1 py-2.5 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-neutral-950 font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 disabled:opacity-50"
                   >
-                    {s.title}
+                    {isGenerating ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin text-neutral-950" />
+                        <span>Editing Image...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Wand2 className="w-4 h-4 text-neutral-950" />
+                        <span>Apply AI Image Edit</span>
+                      </>
+                    )}
                   </button>
-                ))}
+
+                  <button
+                    id="btn-upload-for-edit"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="px-3 py-2.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-300 text-xs font-medium border border-neutral-700 flex items-center gap-1.5"
+                    title="Upload different image to edit"
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>Upload Image</span>
+                  </button>
+                </div>
               </div>
-            </div>
+            ) : (
+              <>
+                <div className="flex items-center justify-between">
+                  <label htmlFor="prompt-input" className="text-xs font-bold uppercase tracking-wider text-neutral-300 flex items-center gap-2">
+                    <Wand2 className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Text Prompt / Visual Idea</span>
+                  </label>
+                  <div className="text-[11px] text-neutral-500">Supports Urdu, Hindi, Roman Urdu, English</div>
+                </div>
+
+                <textarea
+                  id="prompt-input"
+                  rows={3}
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  placeholder="e.g. A futuristic Cyberpunk street in Lahore during rain, or ek jungle mein sher..."
+                  className="w-full bg-neutral-950 border border-neutral-800 rounded-xl p-3 text-sm text-neutral-100 placeholder-neutral-500 focus:outline-none focus:border-amber-500 transition-colors resize-none"
+                />
+
+                {/* Quick Inspiration Badges */}
+                <div className="space-y-1.5">
+                  <span className="text-[11px] text-neutral-400 font-medium">Quick Presets:</span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {samplePrompts.map((s, idx) => (
+                      <button
+                        key={idx}
+                        id={`sample-prompt-${idx}`}
+                        onClick={() => {
+                          setPrompt(s.text);
+                          const targetLang = SUPPORTED_50_LANGUAGES.find((l) => l.code === s.lang);
+                          if (targetLang) onLanguageChange(targetLang);
+                          setVoiceoverScript(s.voice);
+                        }}
+                        className="text-[11px] px-2.5 py-1 rounded-lg bg-neutral-800/80 hover:bg-neutral-800 text-neutral-300 hover:text-amber-300 border border-neutral-700/50 transition-colors"
+                      >
+                        {s.title}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
 
             {/* Image to Video Upload Area */}
-            {subMode === 'image-to-video' && (
+            {(subMode === 'image-to-video' || subMode === 'edit-image') && (
               <div className="pt-2 border-t border-neutral-800">
                 <input
                   ref={fileInputRef}
@@ -443,14 +576,16 @@ export const QuickGenView: React.FC<QuickGenViewProps> = ({
                   className="hidden"
                   id="image-file-input"
                 />
-                <button
-                  id="btn-upload-image"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl border-2 border-dashed border-neutral-700 hover:border-amber-500/80 bg-neutral-950/60 hover:bg-neutral-950 text-xs font-semibold text-neutral-300 hover:text-amber-300 transition-all cursor-pointer"
-                >
-                  <Upload className="w-4 h-4 text-amber-400" />
-                  <span>Upload Custom Image to Animate into Video</span>
-                </button>
+                {subMode === 'image-to-video' && (
+                  <button
+                    id="btn-upload-image"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl border-2 border-dashed border-neutral-700 hover:border-amber-500/80 bg-neutral-950/60 hover:bg-neutral-950 text-xs font-semibold text-neutral-300 hover:text-amber-300 transition-all cursor-pointer"
+                  >
+                    <Upload className="w-4 h-4 text-amber-400" />
+                    <span>Upload Custom Image to Animate into Video</span>
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -552,8 +687,35 @@ export const QuickGenView: React.FC<QuickGenViewProps> = ({
                   <span>Voiceover Script ({selectedLanguage.name}):</span>
                   <button
                     id="btn-preview-speech"
-                    onClick={() => {
-                      speechEngine.current.speak(voiceoverScript, selectedLanguage.code);
+                    onClick={async () => {
+                      if (!currentAudioBase64) {
+                        try {
+                          const res = await fetch('/api/generate-tts', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              text: voiceoverScript,
+                              language: selectedLanguage.name,
+                              languageCode: selectedLanguage.code,
+                            }),
+                          });
+                          if (res.ok) {
+                            const data = await res.json();
+                            if (data.audioBase64) {
+                              setCurrentAudioBase64(data.audioBase64);
+                              speechEngine.current.speak(voiceoverScript, selectedLanguage.code, {
+                                audioBase64: data.audioBase64,
+                              });
+                              return;
+                            }
+                          }
+                        } catch (e) {
+                          console.warn(e);
+                        }
+                      }
+                      speechEngine.current.speak(voiceoverScript, selectedLanguage.code, {
+                        audioBase64: currentAudioBase64 || undefined,
+                      });
                     }}
                     className="text-amber-400 hover:text-amber-300 font-medium flex items-center gap-1"
                   >

@@ -27,6 +27,39 @@ export function renderCinematicFrame({
   const h = canvas.height;
 
   ctx.clearRect(0, 0, w, h);
+
+  // If image is missing, incomplete, or errored (e.g. natural dimensions 0 or NaN)
+  const isImageValid =
+    image &&
+    image.complete &&
+    image.naturalWidth > 0 &&
+    image.naturalHeight > 0 &&
+    !isNaN(image.naturalWidth) &&
+    !isNaN(image.naturalHeight);
+
+  if (!isImageValid) {
+    // Render clean cinematic placeholder backdrop
+    const grad = ctx.createLinearGradient(0, 0, w, h);
+    grad.addColorStop(0, '#090d16');
+    grad.addColorStop(0.5, '#131b2e');
+    grad.addColorStop(1, '#0b0f19');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+
+    // Subtle center emblem
+    ctx.fillStyle = 'rgba(245, 158, 11, 0.15)';
+    ctx.beginPath();
+    ctx.arc(w / 2, h / 2, Math.min(w, h) * 0.18, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Motion label
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+    ctx.font = '14px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(`[ ${cameraMotion} ]`, w / 2, h / 2 + 8);
+    return;
+  }
+
   ctx.save();
 
   // Compute camera motion transform
@@ -36,6 +69,12 @@ export function renderCinematicFrame({
   let rotation = 0;
 
   switch (cameraMotion) {
+    case 'None (Static)':
+      scale = 1.0;
+      offsetX = 0;
+      offsetY = 0;
+      rotation = 0;
+      break;
     case 'Cinematic Zoom In':
       scale = 1.05 + progress * 0.18;
       break;

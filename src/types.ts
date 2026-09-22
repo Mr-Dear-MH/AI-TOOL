@@ -36,6 +36,7 @@ export interface VideoProject {
 }
 
 export type CameraMotionType =
+  | 'None (Static)'
   | 'Cinematic Zoom In'
   | 'Dramatic Zoom Out'
   | 'Pan Left to Right'
